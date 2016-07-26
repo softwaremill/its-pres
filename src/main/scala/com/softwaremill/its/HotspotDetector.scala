@@ -6,13 +6,13 @@ import java.time._
 
 import akka.actor.ActorSystem
 import akka.stream.ActorMaterializer
-import akka.stream.scaladsl.{FileIO, Framing, Sink, Source}
+import akka.stream.scaladsl.{FileIO, Framing, Source}
 import akka.util.ByteString
 
 import scala.concurrent.Await
 import scala.util.Try
 
-object Testing extends App {
+object HotspotDetector extends App {
   implicit val as = ActorSystem()
   implicit val mat = ActorMaterializer()
 
@@ -20,7 +20,7 @@ object Testing extends App {
     .via(Framing.delimiter(ByteString("\n"), maximumFrameLength = 1024))
     .map(_.utf8String)
     .map(_.split(","))
-    .map(Trip.parse)
+    .map(Trip.parseGreen)
     .map(_.toOption)
     .collect { case Some(x) => x }
     .filter(_.isValid)
@@ -52,7 +52,7 @@ case class Trip(pickupLat: Double, pickupLng: Double, dropoffLat: Double, dropof
 
 object Trip {
   private val DateFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-  def parse(in: Array[String]) = Try {
+  def parseGreen(in: Array[String]) = Try {
     Trip(in(6).toDouble, in(5).toDouble, in(8).toDouble, in(7).toDouble, in(10).toDouble,
       LocalDateTime.parse(in(2), DateFormat).atOffset(ZoneOffset.of("-05:00"))) // EST
   }
@@ -148,8 +148,8 @@ case class Window(bounds: WindowBounds, boxCounts: Map[GridBox, Int]) {
 }
 
 object Window {
-  val CountThreshold = 40
-  val NeighborsMultiplierThreshold = 2.5d
+  val CountThreshold = 50
+  val NeighborsMultiplierThreshold = 2.0d
   val NeighborhoodOffsets: List[(Int, Int)] = {
     import GridBox._
     val offsets = List(-BoxUnits, 0, BoxUnits)
