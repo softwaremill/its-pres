@@ -39,7 +39,7 @@ object HotspotDetector extends App {
 
   import scala.concurrent.duration._
 
-  try Await.result(f, 10.minutes)
+  try Await.result(f, 60.minutes)
   finally as.terminate()
 }
 
@@ -54,6 +54,11 @@ object Trip {
   private val DateFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
   def parseGreen(in: Array[String]) = Try {
     Trip(in(6).toDouble, in(5).toDouble, in(8).toDouble, in(7).toDouble, in(10).toDouble,
+      LocalDateTime.parse(in(2), DateFormat).atOffset(ZoneOffset.of("-05:00"))) // EST
+  }
+
+  def parseYellow(in: Array[String]) = Try {
+    Trip(in(6).toDouble, in(5).toDouble, in(10).toDouble, in(9).toDouble, in(10).toDouble,
       LocalDateTime.parse(in(2), DateFormat).atOffset(ZoneOffset.of("-05:00"))) // EST
   }
 }
