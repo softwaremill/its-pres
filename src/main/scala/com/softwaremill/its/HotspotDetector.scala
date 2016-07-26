@@ -8,6 +8,7 @@ import akka.actor.ActorSystem
 import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.{FileIO, Framing, Source}
 import akka.util.ByteString
+import better.files.File
 
 import scala.concurrent.Await
 import scala.util.Try
@@ -35,12 +36,29 @@ object HotspotDetector extends App {
       val sortedHotspots = hotspots.sortBy(_.count)
       sortedHotspots.foreach(println)
       println(s"Found ${hotspots.size} hotspots")
+      saveHotspotsAsJsData(hotspots)
     }
 
   import scala.concurrent.duration._
 
   try Await.result(f, 60.minutes)
   finally as.terminate()
+
+  def saveHotspotsAsJsData(hotspots: List[Hotspot]): Unit = {
+    val f = File("/Users/adamw/projects/its/its-akka/src/main/resources/hotspots.js")
+
+    f.overwrite("")
+    f.appendLine("var hotspots = [")
+    hotspots.foreach { hotspot =>
+      f.appendLine(s"{" +
+        s"lat: ${hotspot.box.center._1}, " +
+        s"lng: ${hotspot.box.center._2}, " +
+        s"count: ${hotspot.count}, " +
+        s"""bounds: { start: "${hotspot.bounds.startAsString}", end: "${hotspot.bounds.endAsString}" }, """ +
+        s"""nghsCount: "${hotspot.neighborCounts.mkString(",")}" },""")
+    }
+    f.appendLine("];")
+  }
 }
 
 case class Trip(pickupLat: Double, pickupLng: Double, dropoffLat: Double, dropoffLng: Double,
@@ -51,7 +69,7 @@ case class Trip(pickupLat: Double, pickupLng: Double, dropoffLat: Double, dropof
 }
 
 object Trip {
-  private val DateFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+  val DateFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
   def parseGreen(in: Array[String]) = Try {
     Trip(in(6).toDouble, in(5).toDouble, in(8).toDouble, in(7).toDouble, in(10).toDouble,
       LocalDateTime.parse(in(2), DateFormat).atOffset(ZoneOffset.of("-05:00"))) // EST
@@ -106,6 +124,9 @@ object GridBox {
   */
 case class WindowBounds(start: OffsetDateTime, end: OffsetDateTime) {
   def contains(time: OffsetDateTime) = !start.isAfter(time) && end.isAfter(time)
+
+  def startAsString = Trip.DateFormat.format(start)
+  def endAsString = Trip.DateFormat.format(end)
 }
 
 object WindowBounds {
