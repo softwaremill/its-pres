@@ -13,39 +13,44 @@ import better.files.File
 import scala.concurrent.Await
 import scala.util.Try
 
-object HotspotDetector extends App {
-  implicit val as = ActorSystem()
-  implicit val mat = ActorMaterializer()
+object HotspotDetector {
+  val month = 10
+  val green = true
 
-  val f = FileIO.fromPath(Paths.get("/Users/adamw/projects/its/sorted_green_tripdata_2015-12.csv"))
-    .via(Framing.delimiter(ByteString("\n"), maximumFrameLength = 1024))
-    .map(_.utf8String)
-    .map(_.split(","))
-    .map(Trip.parseGreen)
-    .map(_.toOption)
-    .collect { case Some(x) => x }
-    .filter(_.isValid)
-    .zip(Source.unfold(0)(st => Some((st+1, st+1))))
-    .map { case (t, i) =>
-    if (i%1000 == 0) println(s"Processing trip $i")
-    t
+  def main(args: Array[String]): Unit = {
+    implicit val as = ActorSystem()
+    implicit val mat = ActorMaterializer()
+
+    val f = FileIO.fromPath(Paths.get(s"/Users/adamw/projects/its/sorted_${if (green) "green" else "yellow"}_tripdata_2015-$month.csv"))
+      .via(Framing.delimiter(ByteString("\n"), maximumFrameLength = 1024))
+      .map(_.utf8String)
+      .map(_.split(","))
+      .map(a => if (green) Trip.parseGreen(a) else Trip.parseYellow(a))
+      .map(_.toOption)
+      .collect { case Some(x) => x }
+      .filter(_.isValid)
+      .zip(Source.unfold(0)(st => Some((st+1, st+1))))
+      .map { case (t, i) =>
+        if (i%1000 == 0) println(s"Processing trip $i")
+        t
+      }
+      .fold(HotspotState(Nil, Nil)) { case (st, t) => st.addTrip(t) }
+      .map(_.result())
+      .runForeach { hotspots =>
+        val sortedHotspots = hotspots.sortBy(_.count)
+        sortedHotspots.foreach(println)
+        println(s"Found ${hotspots.size} hotspots")
+        saveHotspotsAsJsData(hotspots)
+      }
+
+    import scala.concurrent.duration._
+
+    try Await.result(f, 60.minutes)
+    finally as.terminate()
   }
-    .fold(HotspotState(Nil, Nil)) { case (st, t) => st.addTrip(t) }
-    .map(_.result())
-    .runForeach { hotspots =>
-      val sortedHotspots = hotspots.sortBy(_.count)
-      sortedHotspots.foreach(println)
-      println(s"Found ${hotspots.size} hotspots")
-      saveHotspotsAsJsData(hotspots)
-    }
-
-  import scala.concurrent.duration._
-
-  try Await.result(f, 60.minutes)
-  finally as.terminate()
 
   def saveHotspotsAsJsData(hotspots: List[Hotspot]): Unit = {
-    val f = File("/Users/adamw/projects/its/its-akka/src/main/resources/hotspots.js")
+    val f = File(s"/Users/adamw/projects/its/its-akka/src/main/resources/hotspots-${if (green) "green" else "yellow"}-$month.js")
 
     f.overwrite("")
     f.appendLine("var hotspots = [")
@@ -174,8 +179,8 @@ case class Window(bounds: WindowBounds, boxCounts: Map[GridBox, Int]) {
 }
 
 object Window {
-  val CountThreshold = 50
-  val NeighborsMultiplierThreshold = 2.0d
+  val CountThreshold = if (HotspotDetector.green) 50 else 200
+  val NeighborsMultiplierThreshold = if (HotspotDetector.green) 2.0d else 3.0d
   val NeighborhoodOffsets: List[(Int, Int)] = {
     import GridBox._
     val offsets = List(-BoxUnits, 0, BoxUnits)
