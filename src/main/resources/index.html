@@ -25,13 +25,41 @@
           zoom: 12
         });
 
+        var hotspotsByPos = new Map();
         hotspots.forEach(function(h) {
+            var key = '' + h.lat + ',' + h.lng;
+            var current = hotspotsByPos.get(key);
+            if (current === undefined) {
+                current = [];
+                hotspotsByPos.set(key, current);
+            }
+
+            current.push(h);
+        });
+
+        var infowindow = new google.maps.InfoWindow({});
+
+        hotspotsByPos.forEach(function(hs, pos) {
+            var hsCount = hs.length;
+            hs.sort(function(h1, h2) { return h1.count - h2.count; });
+            var mostFrequent = hs[hsCount-1];
+            var leastFrequent = hs[0];
+            var title = 'This hotspot occured ' + hsCount + ' times.<br/>' +
+                'Most frequent: ' + mostFrequent.count + ', from: ' + mostFrequent.bounds.start + '.</br />' +
+                'Least frequent: ' + leastFrequent.count + ', from: ' + leastFrequent.bounds.start;
             var marker = new google.maps.Marker({
-                position: h,
+                position: mostFrequent,
                 map: map,
-                title: 'Hotspot count: ' + h.count + ', from: ' + h.bounds.start + ', to 30 minutes later',
+                title: title,
+            });
+
+            marker.addListener('click', function() {
+                infowindow.setContent(title);
+                infowindow.open(map, marker);
             });
         });
+
+        console.log("Done");
       }
     </script>
 <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyD87aaDqDSxpinHbW8NuU53H0Wpiu6xVg0&callback=initMap"
