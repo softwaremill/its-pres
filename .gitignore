@@ -19,3 +19,7 @@ project/plugins/project/
 .worksheet
 
 hotspots*.js
+
+files/*.csv
+
+src/main/resources/hotspots*js
