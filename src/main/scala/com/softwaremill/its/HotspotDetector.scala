@@ -15,13 +15,13 @@ import scala.concurrent.Await
 import scala.util.Try
 
 object Files {
-  val HotspotFile = "src/main/resources/hotspots.js"
+  val HotspotFile = s"src/main/resources/hotspots-${if (HotspotDetector.green) "green" else "yellow"}-${HotspotDetector.month}-2.js"
 
   val CsvFile = "files"
 }
 
 object HotspotDetector {
-  val month = "08"
+  val month = "10"
   val green = true
 
   def getCsvFileName: String = s"${Files.CsvFile}/sorted_${if (green) "green" else "yellow"}_tripdata_2015-$month.csv"
@@ -209,8 +209,8 @@ case class Window(bounds: WindowBounds, boxCounts: Map[GridBox, Int]) {
 }
 
 object Window {
-  val CountThreshold = if (HotspotDetector.green) 50 else 200
-  val NeighborsMultiplierThreshold = if (HotspotDetector.green) 2.0d else 3.0d
+  val CountThreshold = if (HotspotDetector.green) 50 else 150
+  val NeighborsMultiplierThreshold = if (HotspotDetector.green) 2.0d else 2.5d
   val NeighborhoodOffsets: List[(Int, Int)] = {
     import GridBox._
     val offsets = List(-BoxUnits, 0, BoxUnits)

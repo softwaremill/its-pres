@@ -9,25 +9,19 @@ import org.apache.flink.streaming.api.scala.StreamExecutionEnvironment
 
 object FlinkHotspotDetector extends App {
 
-  import Trip._
-
   val env = StreamExecutionEnvironment.getExecutionEnvironment
 
   HotspotDetector.resetHotspotFile()
 
   val start = new Date()
 
-  implicit def convertStringToOffsetDateTime(s: String): OffsetDateTime =
-    LocalDateTime.parse(s, DateFormat).atOffset(ZoneOffset.of("-05:00"))
-
   val lines = env.readTextFile(HotspotDetector.getCsvFileName)
 
   val elo = lines
     .map(_.split(","))
-    .map(Trip.parseGreen(_))
+    .map(Trip.parseGreen _)
     .map(_.toOption)
-    .filter(_.isDefined)
-    .map(_.get)
+    .flatMap(_.toTraversable)
     .filter(_.isValid)
     .addSink(new RichSinkFunction[Trip] {
       var hotspotState = HotspotState(Nil, Nil)
