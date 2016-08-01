@@ -1,16 +1,33 @@
-name := "ITS Akka"
+name := "ITS"
 
-version := "1.0"
+lazy val commonSettings = Seq(
+  version := "1.0",
+  scalaVersion := "2.11.6",
+  libraryDependencies += "com.github.pathikrit" %% "better-files" % "2.14.0"
+)
 
-scalaVersion := "2.11.6"
+lazy val its = (project in file("."))
+  .settings(commonSettings)
+  .aggregate(akka, flink)
+
+lazy val common = (project in file("common"))
+  .settings(commonSettings)
 
 val akkaVersion = "2.4.8"
-libraryDependencies += "com.typesafe.akka" %% "akka-stream" % akkaVersion
-libraryDependencies += "com.typesafe.akka" %% "akka-slf4j" % akkaVersion
-
-libraryDependencies += "com.github.pathikrit" %% "better-files" % "2.14.0"
+lazy val akka = (project in file("akka"))
+  .settings(commonSettings)
+  .settings(
+    libraryDependencies += "com.typesafe.akka" %% "akka-stream" % akkaVersion,
+    libraryDependencies += "com.typesafe.akka" %% "akka-slf4j" % akkaVersion
+  )
+  .dependsOn(common)
 
 val flinkVersion = "1.0.3"
-libraryDependencies ++= Seq("org.apache.flink" %% "flink-scala" % flinkVersion,
-  "org.apache.flink" %% "flink-clients" % flinkVersion,
-  "org.apache.flink" %% "flink-streaming-scala" % flinkVersion)
+lazy val flink = (project in file("flink"))
+  .settings(commonSettings)
+  .settings(
+    libraryDependencies ++= Seq("org.apache.flink" %% "flink-scala" % flinkVersion,
+      "org.apache.flink" %% "flink-clients" % flinkVersion,
+      "org.apache.flink" %% "flink-streaming-scala" % flinkVersion)
+  )
+  .dependsOn(common)

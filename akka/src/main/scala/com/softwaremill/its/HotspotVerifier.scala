@@ -1,16 +1,14 @@
 package com.softwaremill.its
 
 import java.nio.file.Paths
-import java.time.format.DateTimeFormatter
 import java.time._
 
 import akka.actor.ActorSystem
 import akka.stream.ActorMaterializer
-import akka.stream.scaladsl.{FileIO, Framing, Source}
+import akka.stream.scaladsl.{FileIO, Framing}
 import akka.util.ByteString
 
 import scala.concurrent.Await
-import scala.util.Try
 
 object HotspotVerifier extends App {
   implicit val as = ActorSystem()

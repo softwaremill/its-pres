@@ -1,79 +1,31 @@
 package com.softwaremill.its
 
-import java.nio.file.Paths
+import java.time.{LocalDateTime, OffsetDateTime, ZoneOffset}
 import java.time.format.DateTimeFormatter
-import java.time._
-import java.util.Date
 
-import akka.actor.ActorSystem
-import akka.stream.ActorMaterializer
-import akka.stream.scaladsl.{FileIO, Framing, Source}
-import akka.util.ByteString
 import better.files.File
 
-import scala.concurrent.Await
 import scala.util.Try
 
-object Files {
-  val HotspotFile = s"src/main/resources/hotspots-${if (HotspotDetector.green) "green" else "yellow"}-${HotspotDetector.month}-2.js"
-
+object Config {
+  val Month = "10"
+  val Green = true
+  val HotspotFile = s"src/main/resources/hotspots-${if (Green) "green" else "yellow"}-$Month.js"
   val CsvFile = "files"
+
+  def csvFileName = s"$CsvFile/sorted_${if (Green) "green" else "yellow"}_tripdata_2015-$Month.csv"
 }
 
-object HotspotDetector {
-  val month = "10"
-  val green = true
-
-  def getCsvFileName: String = s"${Files.CsvFile}/sorted_${if (green) "green" else "yellow"}_tripdata_2015-$month.csv"
-
-  def main(args: Array[String]): Unit = {
-
-    implicit val as = ActorSystem()
-    implicit val mat = ActorMaterializer()
-
-    resetHotspotFile()
-
-    val start = new Date()
-
-    val f = FileIO.fromPath(Paths.get(getCsvFileName))
-      .via(Framing.delimiter(ByteString("\n"), maximumFrameLength = 1024))
-      .map(_.utf8String)
-      .map(_.split(","))
-      .map(a => if (green) Trip.parseGreen(a) else Trip.parseYellow(a))
-      .map(_.toOption)
-      .collect { case Some(x) => x }
-      .filter(_.isValid)
-      .zip(Source.unfold(0)(st => Some((st + 1, st + 1))))
-      .map { case (t, i) =>
-        if (i % 1000 == 0) println(s"Processing trip $i")
-        t
-      }
-      .fold(HotspotState(Nil, Nil)) { case (st, t) => st.addTrip(t) }
-      .map(_.result())
-      .runForeach { hotspots =>
-        val sortedHotspots = hotspots.sortBy(_.count)
-        sortedHotspots.foreach(println)
-        println(s"Found ${hotspots.size} hotspots")
-        saveHotspotsAsJsData(hotspots)
-      }
-
-    import scala.concurrent.duration._
-
-    try Await.result(f, 60.minutes)
-    finally as.terminate()
-
-    println(s"Finished in ${new Date().getTime - start.getTime} ms")
-  }
-
+object HotspotJsFile {
   def resetHotspotFile(): Unit = {
-    val f = File(Files.HotspotFile)
+    val f = File(Config.HotspotFile)
     f.overwrite("")
     f.appendLine("var hotspots = [];")
   }
 
   def saveHotspotsAsJsData(hotspots: List[Hotspot]): Unit = {
     if (hotspots.nonEmpty) {
-      val f = File(Files.HotspotFile)
+      val f = File(Config.HotspotFile)
 
       f.appendLine("hotspots = hotspots.concat([")
       hotspots.foreach { hotspot =>
@@ -90,7 +42,7 @@ object HotspotDetector {
 }
 
 case class Trip(pickupLat: Double, pickupLng: Double, dropoffLat: Double, dropoffLng: Double,
-                distance: Double, dropoffTime: OffsetDateTime) {
+  distance: Double, dropoffTime: OffsetDateTime) {
 
   def isValid = isInNy(pickupLat, pickupLng) && isInNy(dropoffLat, dropoffLng) && distance > 0.1
 
@@ -209,8 +161,8 @@ case class Window(bounds: WindowBounds, boxCounts: Map[GridBox, Int]) {
 }
 
 object Window {
-  val CountThreshold = if (HotspotDetector.green) 50 else 150
-  val NeighborsMultiplierThreshold = if (HotspotDetector.green) 2.0d else 2.5d
+  val CountThreshold = if (Config.Green) 50 else 150
+  val NeighborsMultiplierThreshold = if (Config.Green) 2.0d else 2.5d
   val NeighborhoodOffsets: List[(Int, Int)] = {
     import GridBox._
     val offsets = List(-BoxUnits, 0, BoxUnits)

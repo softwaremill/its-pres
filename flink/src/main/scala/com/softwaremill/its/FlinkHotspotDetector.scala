@@ -1,6 +1,5 @@
 package com.softwaremill.its
 
-import java.time.{LocalDateTime, OffsetDateTime, ZoneOffset}
 import java.util.Date
 
 import org.apache.flink.api.scala._
@@ -11,11 +10,11 @@ object FlinkHotspotDetector extends App {
 
   val env = StreamExecutionEnvironment.getExecutionEnvironment
 
-  HotspotDetector.resetHotspotFile()
+  HotspotJsFile.resetHotspotFile()
 
   val start = new Date()
 
-  val lines = env.readTextFile(HotspotDetector.getCsvFileName)
+  val lines = env.readTextFile(Config.csvFileName)
 
   val elo = lines
     .map(_.split(","))
@@ -39,7 +38,7 @@ object FlinkHotspotDetector extends App {
         val sortedHotspots = hotspots.sortBy(_.count)
         sortedHotspots.foreach(println)
         println(s"Found ${hotspots.size} hotspots")
-        HotspotDetector.saveHotspotsAsJsData(hotspots)
+        HotspotJsFile.saveHotspotsAsJsData(hotspots)
       }
     })
 
