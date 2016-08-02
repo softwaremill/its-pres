@@ -74,6 +74,8 @@ case class GridBox(x: Int, y: Int) {
     val (lat, lng) = center
     f"($lat%2.6f, $lng%2.6f)"
   }
+
+  def serialize = x + "," + y
 }
 
 object GridBox {
@@ -99,6 +101,11 @@ object GridBox {
       x <- math.floor((lat - BoxLengthLan) / StepLengthLan + 1).toInt.to(math.floor(lat / StepLengthLan).toInt)
       y <- math.floor((lng - BoxLengthLng) / StepLengthLng + 1).toInt.to(math.floor(lng / StepLengthLng).toInt)
     } yield GridBox(x, y)).toList
+
+  def deserialize(d: String): Try[GridBox] = Try {
+    val a = d.split(",")
+    GridBox(a(0).toInt, a(1).toInt)
+  }
 }
 
 /**
@@ -210,5 +217,94 @@ case class HotspotState(openWindows: List[Window], detectedHotspots: List[Hotspo
   private def addToOpenWindows(t: Trip, wnds: List[Window]): List[Window] = {
     val boxes = GridBox.boxesFor(t.dropoffLat, t.dropoffLng)
     wnds.map(w => boxes.foldLeft(w) { case (w2, b) => w2.addBox(b) })
+  }
+}
+
+/**
+  * @param counts In the map, key `0` is the count for the grid box itself. Other keys are the grid box's neighbors.
+  */
+case class GridBoxCounts(gb: GridBox, counts: Array[Int]) {
+  def add(gbc: GridBoxCounts): GridBoxCounts = {
+    val addedCounts = Array.ofDim[Int](9)
+    var i = 0
+    while (i < 9) {
+      addedCounts(i) = counts(i) + gbc.counts(i)
+      i += 1
+    }
+    GridBoxCounts(gb, addedCounts)
+  }
+
+  def serialize: String = gb.serialize + ";" + counts.mkString(",")
+}
+
+object GridBoxCounts {
+  def forGridBox(gb: GridBox, count: Int = 1) = {
+    val a = Array.ofDim[Int](9)
+    a(0) = count
+    GridBoxCounts(gb, a)
+  }
+
+  def forGridBoxNeighbor(gb: GridBox, nghNumber: Int, count: Int = 1) = {
+    val a = Array.ofDim[Int](9)
+    a(nghNumber) = count
+    GridBoxCounts(gb, a)
+  }
+
+  def forTrip(t: Trip): List[GridBoxCounts] = {
+    val boxes = GridBox.boxesFor(t.dropoffLat, t.dropoffLng)
+    boxes.flatMap { b =>
+      List(
+        GridBoxCounts.forGridBox(b),
+        GridBoxCounts.forGridBoxNeighbor(GridBox(b.x + 5, b.y - 5), 1),
+        GridBoxCounts.forGridBoxNeighbor(GridBox(b.x + 5, b.y + 0), 2),
+        GridBoxCounts.forGridBoxNeighbor(GridBox(b.x + 5, b.y + 5), 3),
+        GridBoxCounts.forGridBoxNeighbor(GridBox(b.x + 0, b.y + 5), 4),
+        GridBoxCounts.forGridBoxNeighbor(GridBox(b.x + 0, b.y - 5), 5),
+        GridBoxCounts.forGridBoxNeighbor(GridBox(b.x - 5, b.y - 5), 6),
+        GridBoxCounts.forGridBoxNeighbor(GridBox(b.x - 5, b.y + 0), 7),
+        GridBoxCounts.forGridBoxNeighbor(GridBox(b.x - 5, b.y + 5), 8)
+      )
+    }
+  }
+
+  def forBoxesWithCounts(i: (Int, GridBox)): List[GridBoxCounts] = {
+    val count = i._1
+    val b = i._2
+    List(
+      GridBoxCounts.forGridBox(b, count),
+      GridBoxCounts.forGridBoxNeighbor(GridBox(b.x + 5, b.y - 5), 1, count),
+      GridBoxCounts.forGridBoxNeighbor(GridBox(b.x + 5, b.y + 0), 2, count),
+      GridBoxCounts.forGridBoxNeighbor(GridBox(b.x + 5, b.y + 5), 3, count),
+      GridBoxCounts.forGridBoxNeighbor(GridBox(b.x + 0, b.y + 5), 4, count),
+      GridBoxCounts.forGridBoxNeighbor(GridBox(b.x + 0, b.y - 5), 5, count),
+      GridBoxCounts.forGridBoxNeighbor(GridBox(b.x - 5, b.y - 5), 6, count),
+      GridBoxCounts.forGridBoxNeighbor(GridBox(b.x - 5, b.y + 0), 7, count),
+      GridBoxCounts.forGridBoxNeighbor(GridBox(b.x - 5, b.y + 5), 8, count)
+    )
+  }
+
+  def deserialize(d: String): Try[GridBoxCounts] = Try(d.split(";")).flatMap { a =>
+    GridBox.deserialize(a(0)).map(gb => GridBoxCounts(gb, a(1).split(",").map(_.toInt)))
+  }
+}
+
+case class AddedCountsWithWindow(gb: GridBox, counts: Array[Int], bounds: WindowBounds) {
+  def detectHotspot: Option[Hotspot] = {
+    val centerCount = counts(0)
+
+    import Window._
+
+    if (centerCount < CountThreshold) None else {
+      val neighborCounts = counts.toList.tail
+
+      if (neighborCounts.forall(nghCount => nghCount * NeighborsMultiplierThreshold <= centerCount)) {
+        println("HOTSPOT " + centerCount)
+
+        Some(Hotspot(bounds, gb, centerCount, neighborCounts))
+      } else {
+        println("NON-HOTSPOT CANDIDATE " + centerCount)
+        None
+      }
+    }
   }
 }
