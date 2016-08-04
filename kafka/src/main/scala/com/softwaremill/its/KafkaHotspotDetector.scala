@@ -286,16 +286,6 @@ object KafkaHotspotDetector {
   }
 }
 
-case class GridBoxCountsWithTimestamp(gbc: GridBoxCounts, ts: Long) {
-  def serialize = gbc.serialize + "!" + ts
-}
-
-object GridBoxCountsWithTimestamp {
-  def deserialize(d: String) = Try(d.split("!")).flatMap { a =>
-    GridBoxCounts.deserialize(a(0)).map(gbc => GridBoxCountsWithTimestamp(gbc, a(1).toLong))
-  }
-}
-
 class HostpotDetectorTimestampExtractor extends TimestampExtractor {
   override def extract(record: ConsumerRecord[AnyRef, AnyRef]) = {
     if (record.key() == KafkaHotspotDetector.CsvRecordKey) {

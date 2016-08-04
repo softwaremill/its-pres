@@ -24,7 +24,7 @@ object HotspotDetector {
       .via(Framing.delimiter(ByteString("\n"), maximumFrameLength = 1024))
       .map(_.utf8String)
       .map(_.split(","))
-      .map(a => if (Config.Green) Trip.parseGreen(a) else Trip.parseYellow(a))
+      .map(Trip.parse)
       .map(_.toOption)
       .collect { case Some(x) => x }
       .filter(_.isValid)

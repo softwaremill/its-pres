@@ -11,7 +11,7 @@ object Config {
   val Month = "10"
   val Green = true
   val HotspotFile = s"src/main/resources/hotspots-${if (Green) "green" else "yellow"}-$Month.js"
-  val CsvFile = "files"
+  val CsvFile = "/Users/adamw/projects/its/its-akka/files"
 
   def csvFileName = s"$CsvFile/sorted_${if (Green) "green" else "yellow"}_tripdata_2015-$Month.csv"
 }
@@ -51,6 +51,8 @@ case class Trip(pickupLat: Double, pickupLng: Double, dropoffLat: Double, dropof
 
 object Trip {
   val DateFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+
+  def parse(in: Array[String]) = if (Config.Green) parseGreen(in) else parseYellow(in)
 
   def parseGreen(in: Array[String]) = Try {
     Trip(in(6).toDouble, in(5).toDouble, in(8).toDouble, in(7).toDouble, in(10).toDouble,
@@ -285,6 +287,16 @@ object GridBoxCounts {
 
   def deserialize(d: String): Try[GridBoxCounts] = Try(d.split(";")).flatMap { a =>
     GridBox.deserialize(a(0)).map(gb => GridBoxCounts(gb, a(1).split(",").map(_.toInt)))
+  }
+}
+
+case class GridBoxCountsWithTimestamp(gbc: GridBoxCounts, ts: Long) {
+  def serialize = gbc.serialize + "!" + ts
+}
+
+object GridBoxCountsWithTimestamp {
+  def deserialize(d: String) = Try(d.split("!")).flatMap { a =>
+    GridBoxCounts.deserialize(a(0)).map(gbc => GridBoxCountsWithTimestamp(gbc, a(1).toLong))
   }
 }
 
