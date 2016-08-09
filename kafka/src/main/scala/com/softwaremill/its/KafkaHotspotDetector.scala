@@ -1,21 +1,20 @@
 package com.softwaremill.its
 
 import java.time.{Instant, ZoneOffset}
-import java.{lang, util}
 import java.util.Properties
+import java.{lang, util}
 
 import net.manub.embeddedkafka.{EmbeddedKafka, EmbeddedKafkaConfig}
 import org.apache.kafka.clients.consumer.{ConsumerConfig, ConsumerRecord, KafkaConsumer}
 import org.apache.kafka.clients.producer.{KafkaProducer, ProducerRecord}
 import org.apache.kafka.common.serialization._
 import org.apache.kafka.streams.kstream._
-import org.apache.kafka.streams.processor.{Processor, ProcessorContext, ProcessorSupplier, TimestampExtractor}
+import org.apache.kafka.streams.processor.{ProcessorContext, TimestampExtractor}
 import org.apache.kafka.streams.state.{KeyValueStore, Stores}
 import org.apache.kafka.streams.{KafkaStreams, KeyValue, StreamsConfig}
 
 import scala.collection.JavaConverters._
 import scala.io.Source
-import scala.util.Try
 
 object KafkaHotspotDetector {
   var maxDate = 0L
@@ -24,7 +23,7 @@ object KafkaHotspotDetector {
     implicit val config = EmbeddedKafkaConfig(9092, 2181, Map("num.partitions" -> "8"))
     EmbeddedKafka.start()
     EmbeddedKafka.createCustomTopic("csv")
-    EmbeddedKafka.createCustomTopic("grid-boxes", partitions = 8)
+    EmbeddedKafka.createCustomTopic("windowed-trips", partitions = 8)
 
     daemonThread {
       produceCsv("csv")
@@ -75,18 +74,13 @@ object KafkaHotspotDetector {
 
     builder
       .stream(Serdes.String(), Serdes.String(), from)
-      .flatMap(new KeyValueMapper[String, String, lang.Iterable[KeyValue[GridBox, GridBoxCountsWithTimestamp]]] {
+      .flatMap(new KeyValueMapper[String, String, lang.Iterable[KeyValue[WindowBounds, Trip]]] {
         override def apply(key: String, value: String) = {
-          Try(value)
-            .map(_.split(","))
-            .flatMap(a => if (Config.Green) Trip.parseGreen(a) else Trip.parseYellow(a))
-            .toOption
-            .filter(_.isValid) match {
-
-            case Some(trip) =>
-              GridBoxCounts
-                .forTrip(trip)
-                .map(gbc => new KeyValue(gbc.gb, GridBoxCountsWithTimestamp(gbc, trip.dropoffTime.toEpochSecond * 1000L)))
+          Trip.parseOrDiscard(value).headOption match {
+            case Some(t) =>
+              WindowBounds
+                .boundsFor(t.dropoffTime)
+                .map(wb => new KeyValue(wb, t))
                 .asJava
 
             case None =>
@@ -94,24 +88,24 @@ object KafkaHotspotDetector {
           }
         }
       })
-      .through(gridBoxSerde, gridBoxCountsTimestampSerde, "grid-boxes") // distribute work
+      .through(wbSerde, tripSerde, "windowed-trips") // distribute work
       .aggregateByKey(
-      new Initializer[GridBoxCounts] {
-        override def apply() = GridBoxCounts.forGridBox(GridBox(0, 0), 0)
+      new Initializer[Window] {
+        override def apply() = Window.Empty
       },
-      new Aggregator[GridBox, GridBoxCountsWithTimestamp, GridBoxCounts] {
-        override def apply(aggKey: GridBox, value: GridBoxCountsWithTimestamp, aggregate: GridBoxCounts) =
-          value.gbc.add(aggregate)
+      new Aggregator[WindowBounds, Trip, Window] {
+        override def apply(aggKey: WindowBounds, value: Trip, aggregate: Window) =
+          aggregate.copy(bounds = aggKey).addTrip(value)
       },
       TimeWindows
-        .of("grid-box-windows", WindowBounds.WindowLengthMinutes*60*1000L)
+        .of("windowed-trips-windows", WindowBounds.WindowLengthMinutes*60*1000L)
         .advanceBy(WindowBounds.StepLengthMinutes*60*1000L),
-      gridBoxSerde,
-      gridBoxCountsSerde
+      wbSerde,
+      windowSerde
     )
       .toStream
-      .transform(new TransformerSupplier[Windowed[GridBox], GridBoxCounts, KeyValue[String, Option[String]]] {
-        override def get() = new Transformer[Windowed[GridBox], GridBoxCounts, KeyValue[String, Option[String]]] {
+      .transform(new TransformerSupplier[Windowed[WindowBounds], Window, KeyValue[String, Option[String]]] {
+        override def get() = new Transformer[Windowed[WindowBounds], Window, KeyValue[String, Option[String]]] {
           var ctx: ProcessorContext = _
           var store: KeyValueStore[String, String] = _
 
@@ -122,7 +116,7 @@ object KafkaHotspotDetector {
 
           override def punctuate(timestamp: Long) = null
 
-          override def transform(key: Windowed[GridBox], value: GridBoxCounts) = {
+          override def transform(key: Windowed[WindowBounds], value: Window) = {
             val start = Instant.ofEpochMilli(key.window().start()).atOffset(ZoneOffset.UTC)
             val end = Instant.ofEpochMilli(key.window().end()).atOffset(ZoneOffset.UTC)
 
@@ -131,20 +125,20 @@ object KafkaHotspotDetector {
               println("WINDOW MAX: " + end)
             }
 
-            val c = AddedCountsWithWindow(key.key(), value.counts, WindowBounds(start, end))
-            val storeKey = start.toString + key.key().serialize
-            val inStore = Option(store.get(storeKey))
+            val storeKey = key.window().start().toString
+            val inStore = Option(store.get(storeKey)).map(_.toInt)
+            val hotspots = value.close()
 
-            (c.detectHotspot, inStore) match {
-              case (None, None) => new KeyValue("1", None)
-              case (None, Some(_)) =>
-                store.delete(storeKey)
-                new KeyValue("1", Some("RMV HOTSPOT " + start + ", " + key.key()))
-              case (Some(hs), None) =>
-                store.put(storeKey, "yes")
-                new KeyValue("1", Some("ADD HOTSPOT " + hs))
-              case (Some(hs), Some(_)) =>
-                new KeyValue("1", Some("UPD HOTSPOT " + hs))
+            (hotspots.size, inStore) match {
+              case (0, None) => new KeyValue("1", None)
+              case (x, None) =>
+                store.put(storeKey, x.toString)
+                new KeyValue("1", Some(s"Hotspots from: $start->$end: $x"))
+              case (x, Some(y)) if x == y => new KeyValue("1", None)
+              case (x, Some(y)) =>
+                if (x == 0) store.delete(storeKey)
+                else store.put(storeKey, x.toString)
+                new KeyValue("1", Some(s"Hotspots from: $start->$end: $x->$y"))
             }
           }
 
@@ -159,26 +153,6 @@ object KafkaHotspotDetector {
           }
         }
       })
-//      .flatMap(new KeyValueMapper[Windowed[GridBox], GridBoxCounts, lang.Iterable[KeyValue[String, String]]] {
-//        override def apply(key: Windowed[GridBox], value: GridBoxCounts) = {
-//          val end = Instant.ofEpochMilli(key.window().end()).atOffset(ZoneOffset.UTC)
-//
-//          if (key.window().end() > maxDate) {
-//            maxDate = key.window().end()
-//            println("WINDOW MAX: " + end)
-//          }
-//
-//          val c = AddedCountsWithWindow(key.key(), value.counts, WindowBounds(
-//            Instant.ofEpochMilli(key.window().start()).atOffset(ZoneOffset.UTC),
-//            end
-//          ))
-//
-//          c.detectHotspot match {
-//            case None => util.Collections.emptyList()
-//            case Some(hs) => util.Collections.singletonList(new KeyValue("1", hs.toString))
-//          }
-//        }
-//      })
       .to(to)
 
     val streams = new KafkaStreams(builder, streamProps)
@@ -241,39 +215,39 @@ object KafkaHotspotDetector {
     props
   }
 
-  val gridBoxSerde = Serdes.serdeFrom(new Serializer[GridBox] {
+  val wbSerde = Serdes.serdeFrom(new Serializer[WindowBounds] {
     override def configure(configs: util.Map[String, _], isKey: Boolean) = {}
-    override def serialize(topic: String, data: GridBox) = data.serialize.getBytes("UTF-8")
+    override def serialize(topic: String, data: WindowBounds) = data.serialize.getBytes("UTF-8")
     override def close() = {}
-  }, new Deserializer[GridBox] {
+  }, new Deserializer[WindowBounds] {
     override def configure(configs: util.Map[String, _], isKey: Boolean) = {}
     override def close() = {}
     override def deserialize(topic: String, data: Array[Byte]) = {
-      GridBox.deserialize(new String(data, "UTF-8")).get
+      WindowBounds.deserialize(new String(data, "UTF-8")).get
     }
   })
 
-  val gridBoxCountsTimestampSerde = Serdes.serdeFrom(new Serializer[GridBoxCountsWithTimestamp] {
+  val tripSerde = Serdes.serdeFrom(new Serializer[Trip] {
     override def configure(configs: util.Map[String, _], isKey: Boolean) = {}
-    override def serialize(topic: String, data: GridBoxCountsWithTimestamp) = data.serialize.getBytes("UTF-8")
+    override def serialize(topic: String, data: Trip) = data.serialize.getBytes("UTF-8")
     override def close() = {}
-  }, new Deserializer[GridBoxCountsWithTimestamp] {
+  }, new Deserializer[Trip] {
     override def configure(configs: util.Map[String, _], isKey: Boolean) = {}
     override def close() = {}
     override def deserialize(topic: String, data: Array[Byte]) = {
-      GridBoxCountsWithTimestamp.deserialize(new String(data, "UTF-8")).get
+      Trip.deserialize(new String(data, "UTF-8")).get
     }
   })
 
-  val gridBoxCountsSerde = Serdes.serdeFrom(new Serializer[GridBoxCounts] {
+  val windowSerde = Serdes.serdeFrom(new Serializer[Window] {
     override def configure(configs: util.Map[String, _], isKey: Boolean) = {}
-    override def serialize(topic: String, data: GridBoxCounts) = data.serialize.getBytes("UTF-8")
+    override def serialize(topic: String, data: Window) = data.serialize.getBytes("UTF-8")
     override def close() = {}
-  }, new Deserializer[GridBoxCounts] {
+  }, new Deserializer[Window] {
     override def configure(configs: util.Map[String, _], isKey: Boolean) = {}
     override def close() = {}
     override def deserialize(topic: String, data: Array[Byte]) = {
-      GridBoxCounts.deserialize(new String(data, "UTF-8")).get
+      Window.deserialize(new String(data, "UTF-8")).get
     }
   })
 
@@ -289,16 +263,13 @@ object KafkaHotspotDetector {
 class HostpotDetectorTimestampExtractor extends TimestampExtractor {
   override def extract(record: ConsumerRecord[AnyRef, AnyRef]) = {
     if (record.key() == KafkaHotspotDetector.CsvRecordKey) {
-      Try(record.value().asInstanceOf[String])
-        .map(_.split(","))
-        .flatMap(a => if (Config.Green) Trip.parseGreen(a) else Trip.parseYellow(a))
-        .toOption
-        .filter(_.isValid)
+      Trip.parseOrDiscard(record.value().asInstanceOf[String])
         .map(_.dropoffTime.toEpochSecond*1000L)
+        .headOption
         .getOrElse(0L)
     } else {
       record.value() match {
-        case GridBoxCountsWithTimestamp(_, ts) => ts
+        case t: Trip => t.dropoffTime.toEpochSecond*1000L
         case _ => throw new RuntimeException(s"Called for $record")
       }
     }

@@ -1,7 +1,6 @@
 package com.softwaremill.its
 
 import java.nio.file.Paths
-import java.util.Date
 
 import akka.actor.ActorSystem
 import akka.stream.ActorMaterializer
@@ -10,24 +9,18 @@ import akka.util.ByteString
 
 import scala.concurrent.Await
 
-object HotspotDetector {
-  def main(args: Array[String]): Unit = {
+object AkkaHotspotDetector {
+  def main(args: Array[String]): Unit = Timed {
 
     implicit val as = ActorSystem()
     implicit val mat = ActorMaterializer()
 
     HotspotJsFile.resetHotspotFile()
 
-    val start = new Date()
-
     val f = FileIO.fromPath(Paths.get(Config.csvFileName))
       .via(Framing.delimiter(ByteString("\n"), maximumFrameLength = 1024))
       .map(_.utf8String)
-      .map(_.split(","))
-      .map(Trip.parse)
-      .map(_.toOption)
-      .collect { case Some(x) => x }
-      .filter(_.isValid)
+      .mapConcat(Trip.parseOrDiscard)
       .zip(Source.unfold(0)(st => Some((st + 1, st + 1))))
       .map { case (t, i) =>
         if (i % 1000 == 0) println(s"Processing trip $i")
@@ -46,10 +39,6 @@ object HotspotDetector {
 
     try Await.result(f, 60.minutes)
     finally as.terminate()
-
-    println(s"Finished in ${new Date().getTime - start.getTime} ms")
   }
-
-
 }
 

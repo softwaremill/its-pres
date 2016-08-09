@@ -1,6 +1,6 @@
 package com.softwaremill.its
 
-import java.time.{LocalDateTime, OffsetDateTime, ZoneOffset}
+import java.time._
 import java.time.format.DateTimeFormatter
 
 import better.files.File
@@ -47,10 +47,19 @@ case class Trip(pickupLat: Double, pickupLng: Double, dropoffLat: Double, dropof
   def isValid = isInNy(pickupLat, pickupLng) && isInNy(dropoffLat, dropoffLng) && distance > 0.1
 
   def isInNy(lat: Double, lng: Double) = lat > 39.0 && lat < 43.0 && lng > -75.0 && lng < 71.0
+
+  def serialize = s"$pickupLat,$pickupLng,$dropoffLat,$dropoffLng,$distance,${dropoffTime.toEpochSecond}"
 }
 
 object Trip {
   val DateFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+
+  def parseOrDiscard(l: String): List[Trip] = Try(l)
+    .map(_.split(","))
+    .flatMap(Trip.parse)
+    .toOption
+    .filter(_.isValid)
+    .toList
 
   def parse(in: Array[String]) = if (Config.Green) parseGreen(in) else parseYellow(in)
 
@@ -62,6 +71,12 @@ object Trip {
   def parseYellow(in: Array[String]) = Try {
     Trip(in(6).toDouble, in(5).toDouble, in(10).toDouble, in(9).toDouble, in(10).toDouble,
       LocalDateTime.parse(in(2), DateFormat).atOffset(ZoneOffset.of("-05:00"))) // EST
+  }
+
+  def deserialize(d: String) = Try {
+    val a = d.split(",")
+    Trip(a(0).toDouble, a(1).toDouble, a(2).toDouble, a(3).toDouble, a(4).toDouble,
+      OffsetDateTime.ofInstant(Instant.ofEpochSecond(a(5).toLong), ZoneId.of("UTC")))
   }
 }
 
@@ -120,6 +135,8 @@ case class WindowBounds(start: OffsetDateTime, end: OffsetDateTime) {
   def startAsString = Trip.DateFormat.format(start)
 
   def endAsString = Trip.DateFormat.format(end)
+
+  def serialize = start.toEpochSecond + "," + end.toEpochSecond
 }
 
 object WindowBounds {
@@ -137,6 +154,13 @@ object WindowBounds {
         firstBoundStart.plusMinutes(i * StepLengthMinutes + WindowLengthMinutes)
       )).toList
   }
+
+  def deserialize(d: String): Try[WindowBounds] = Try {
+    val a = d.split(",")
+    WindowBounds(
+      OffsetDateTime.ofInstant(Instant.ofEpochSecond(a(0).toLong), ZoneId.of("UTC")),
+      OffsetDateTime.ofInstant(Instant.ofEpochSecond(a(1).toLong), ZoneId.of("UTC")))
+  }
 }
 
 case class Hotspot(bounds: WindowBounds, box: GridBox, count: Int, neighborCounts: List[Int])
@@ -146,6 +170,14 @@ case class Window(bounds: WindowBounds, boxCounts: Map[GridBox, Int]) {
   import Window._
 
   def addBox(gb: GridBox): Window = copy(boxCounts = boxCounts.updated(gb, boxCounts.getOrElse(gb, 0) + 1))
+
+  def addWindow(w: Window): Window = copy(boxCounts =
+    boxCounts ++ w.boxCounts.map { case (k,v) => k -> (v + boxCounts.getOrElse(k,0)) })
+
+  def addTrip(t: Trip): Window = {
+    val boxes = GridBox.boxesFor(t.dropoffLat, t.dropoffLng)
+    boxes.foldLeft(this) { case (w2, b) => w2.addBox(b) }
+  }
 
   def close(): List[Hotspot] = {
     boxCounts.flatMap { case (box, count) =>
@@ -167,6 +199,8 @@ case class Window(bounds: WindowBounds, boxCounts: Map[GridBox, Int]) {
       }
     }
   }.toList
+
+  def serialize = s"${bounds.serialize}!${boxCounts.map { case (k, v) => s"${k.serialize}#$v"}.mkString("^")}"
 }
 
 object Window {
@@ -180,6 +214,18 @@ object Window {
       yo <- offsets
       if !(xo == 0 && yo == 0)
     } yield (xo, yo)
+  }
+  val Empty = Window(WindowBounds(OffsetDateTime.MIN, OffsetDateTime.MAX), Map.empty)
+
+  def deserialize(d: String) = Try {
+    val a = d.split('!')
+    val aa = a(1).split('^')
+    val counts = aa.map { kv =>
+      val aaa = kv.split('#')
+      GridBox.deserialize(aaa(0)).get -> aaa(1).toInt
+    }.toMap
+
+    Window(WindowBounds.deserialize(a(0)).get, counts)
   }
 }
 
@@ -287,36 +333,5 @@ object GridBoxCounts {
 
   def deserialize(d: String): Try[GridBoxCounts] = Try(d.split(";")).flatMap { a =>
     GridBox.deserialize(a(0)).map(gb => GridBoxCounts(gb, a(1).split(",").map(_.toInt)))
-  }
-}
-
-case class GridBoxCountsWithTimestamp(gbc: GridBoxCounts, ts: Long) {
-  def serialize = gbc.serialize + "!" + ts
-}
-
-object GridBoxCountsWithTimestamp {
-  def deserialize(d: String) = Try(d.split("!")).flatMap { a =>
-    GridBoxCounts.deserialize(a(0)).map(gbc => GridBoxCountsWithTimestamp(gbc, a(1).toLong))
-  }
-}
-
-case class AddedCountsWithWindow(gb: GridBox, counts: Array[Int], bounds: WindowBounds) {
-  def detectHotspot: Option[Hotspot] = {
-    val centerCount = counts(0)
-
-    import Window._
-
-    if (centerCount < CountThreshold) None else {
-      val neighborCounts = counts.toList.tail
-
-      if (neighborCounts.forall(nghCount => nghCount * NeighborsMultiplierThreshold <= centerCount)) {
-        println("HOTSPOT " + centerCount)
-
-        Some(Hotspot(bounds, gb, centerCount, neighborCounts))
-      } else {
-        println("NON-HOTSPOT CANDIDATE " + centerCount)
-        None
-      }
-    }
   }
 }

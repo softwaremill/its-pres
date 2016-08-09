@@ -1,7 +1,6 @@
 package com.softwaremill.its
 
 import java.nio.file.Paths
-import java.util.Date
 
 import akka.actor.ActorSystem
 import akka.stream.ActorMaterializer
@@ -12,23 +11,17 @@ import scala.collection.mutable
 import scala.concurrent.Await
 
 object HotspotDetector2 {
-  def main(args: Array[String]): Unit = {
+  def main(args: Array[String]): Unit = Timed {
 
     implicit val as = ActorSystem()
     implicit val mat = ActorMaterializer()
 
     HotspotJsFile.resetHotspotFile()
 
-    val start = new Date()
-
     val f = FileIO.fromPath(Paths.get(Config.csvFileName))
       .via(Framing.delimiter(ByteString("\n"), maximumFrameLength = 1024))
       .map(_.utf8String)
-      .map(_.split(","))
-      .map(Trip.parse)
-      .map(_.toOption)
-      .collect { case Some(x) => x }
-      .filter(_.isValid)
+      .mapConcat(Trip.parseOrDiscard)
       .zip(Source.unfold(0)(st => Some((st + 1, st + 1))))
       .map { case (t, i) =>
         if (i % 1000 == 0) println(s"Processing trip $i")
@@ -62,9 +55,7 @@ object HotspotDetector2 {
       .fold(Window(null, Map())) {
         case (w, OpenWindow(wb)) => w.copy(bounds = wb)
         case (w, CloseWindow(_)) => w
-        case (w, AddToWindow(t, wb)) =>
-          val boxes = GridBox.boxesFor(t.dropoffLat, t.dropoffLng)
-          boxes.foldLeft(w) { case (w2, b) => w2.addBox(b) }
+        case (w, AddToWindow(t, wb)) => w.addTrip(t)
       }
       .async
       .mergeSubstreams
@@ -81,11 +72,7 @@ object HotspotDetector2 {
 
     try Await.result(f, 60.minutes)
     finally as.terminate()
-
-    println(s"Finished in ${new Date().getTime - start.getTime} ms")
   }
-
-
 }
 
 trait WindowCommand {
